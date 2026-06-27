@@ -1,121 +1,719 @@
 # Especificación Técnica de Arquitectura Base - Monolito Híbrido Modular
 
-Este documento contiene las definiciones de arquitectura, stack tecnológico, decisiones de diseño y el plan de implementación base para el desarrollo de aplicaciones web de alta concurrencia desplegadas en el Edge.
+Este documento define la arquitectura base del proyecto **Himnario MonteSanto Web**. Su propósito es servir como referencia técnica para el desarrollo, mantenimiento, testing, despliegue y evolución del sistema.
 
-## 1. Stack Tecnológico Base
+La arquitectura está diseñada como un **monolito híbrido modular** desplegado en **Cloudflare Workers**, combinando una SPA en React con una API backend en Hono dentro de un único artefacto de despliegue.
+
+---
+
+## 1. Objetivos Arquitectónicos
+
+La arquitectura busca cumplir los siguientes objetivos:
+
+- Mantener una separación clara entre dominio, infraestructura backend e infraestructura frontend.
+- Permitir despliegue global en Edge mediante Cloudflare Workers.
+- Evitar acoplamiento entre React, Hono, Drizzle, Better Auth y el dominio.
+- Facilitar testing unitario, de endpoints y de componentes.
+- Permitir evolución modular del sistema sin convertir el código en una estructura monolítica desordenada.
+- Mantener una base compatible con herramientas de automatización y agentes de desarrollo.
+
+---
+
+## 2. Stack Tecnológico Base
 
 ### Plataforma de Despliegue
-* **Servicio:** Cloudflare Workers (con Assets/Static Fetching habilitado).
-* **Modelo de Ejecución:** Edge Computing (baja latencia global, escalado instantáneo).
 
-### Herramientas de Desarrollo, Calidad y Pruebas (Tooling)
-* **Gestor de Paquetes:** pnpm (instalación ultra rápida mediante enlaces simbólicos, eficiente en disco y óptimo para arquitecturas modulares).
-* **Bundler/Dev Server:** Vite (compilación de la SPA, TypeScript y entorno unificado con HMR).
-* **Linter & Formatter:** Biome (herramienta unificada ultra rápida para el formateo, linting y análisis estático del código TypeScript/React).
-* **Automatización Local:** Husky (gestión de Git Hooks para automatizar la validación de código antes de cada commit).
-* **Suite de Testing:** Vitest (entorno de pruebas unificado de velocidad ultra alta para la ejecución de test de dominio, backend y frontend).
-* **Entorno Cloudflare:** Wrangler CLI (empaquetado del Worker y despliegue local/remoto).
+- **Servicio:** Cloudflare Workers con Assets/Static Fetching habilitado.
+- **Modelo de ejecución:** Edge Computing.
+- **Runtime local:** Wrangler.
+- **Compatibilidad Node:** `nodejs_compat` habilitado cuando dependencias externas lo requieran, como Better Auth.
 
-### Framework de Aplicación (Backend API)
-* **Tecnología:** Hono.js
-* **Rol:** API REST y Servidor de Archivos Estáticos para la SPA.
-* **Prefijo de API:** `/api/v1/*`
-* **Lenguaje:** TypeScript puro.
+### Herramientas de Desarrollo, Calidad y Pruebas
+
+- **Gestor de paquetes:** pnpm.
+- **Bundler/Dev Server:** Vite.
+- **Linter & Formatter:** Biome.
+- **Git Hooks:** Husky.
+- **Testing:** Vitest.
+- **Cloudflare CLI:** Wrangler.
+
+### Backend API
+
+- **Framework:** Hono.js.
+- **Lenguaje:** TypeScript.
+- **Prefijo de API:** `/api/v1/*`.
+- **Responsabilidad:** Exponer endpoints HTTP, middlewares, manejo global de errores y servir la SPA en producción.
+
+### Frontend SPA
+
+- **Librería:** React.
+- **Router:** TanStack Router.
+- **Estado servidor/cache:** TanStack Query.
+- **Cliente HTTP de negocio:** Axios.
+- **Estilos:** Tailwind CSS.
+- **UI:** Shadcn UI.
+- **Formularios:** React Hook Form.
+- **Validación:** Zod.
+- **Tablas complejas:** TanStack Table.
 
 ### Autenticación y Seguridad
-* **Solución:** Better-auth
-* **Características:** Autenticación agnóstica al framework, soporte nativo para TypeScript, plugins de sesión basados en cookies seguras e integración directa con Drizzle ORM.
-* **Control de Acceso:** Manejo de roles (RBAC) interconstruido para diferenciar accesos en la plataforma.
 
-### Cliente (Frontend SPA)
-* **Librería Core:** React
-* **Enrutador:** TanStack Router (enrutamiento seguro basado en tipos en el lado del cliente).
-* **Estilos:** Tailwind CSS (Diseño utilitario y responsivo).
-* **Componentes de UI:** Shadcn UI (Componentes accesibles basados en Radix UI y estilizados con Tailwind, copiados directamente al repositorio).
-* **Gestión de Estado y Servidor:** TanStack Query (React Query) (Manejo asíncrono de peticiones HTTP, caché y mutaciones con la API de Hono).
-* **Manejo de Datos Complejos:** TanStack Table (Lógica headless para ordenamiento, filtrado y paginación de datos, integrada visualmente con Shadcn UI).
-* **Formularios y Validaciones:** React Hook Form + Zod (Estructura de formularios ligera, eficiente en re-renders y validación mediante esquemas de datos).
+- **Solución:** Better Auth.
+- **Persistencia:** Drizzle Adapter.
+- **Sesiones:** Cookies seguras `HttpOnly`, `Secure` y `SameSite=Lax`.
+- **Módulo responsable:** `identity`.
+- **Cliente frontend de autenticación:** cliente oficial de Better Auth.
 
 ### Base de Datos y Persistencia
-* **Motor:** Neon PostgreSQL (Serverless Postgres).
-* **Driver de Conexión:** `@neondatabase/serverless` (WebSockets optimizados para entornos Edge).
-* **ORM:** Drizzle ORM (Mapeo de tipos y control total de consultas SQL nativas).
+
+- **Motor:** Neon PostgreSQL.
+- **Driver:** `@neondatabase/serverless` mediante `drizzle-orm/neon-http`.
+- **ORM:** Drizzle ORM.
+- **Migraciones:** Drizzle Kit.
 
 ---
 
-## 2. Decisiones de Arquitectura
+## 3. Arquitectura General
 
-### Monolito con SPA Embebida
-El proyecto se compila en un único artefacto donde el Worker de Cloudflare intercepta todas las peticiones:
-1. Las rutas que coinciden con `/api/v1/*` ejecutan los controladores y endpoints de Hono.
-2. Cualquier otra ruta (`/*`) sirve el `index.html` generado previamente por Vite en la carpeta de distribución (`dist`), permitiendo que TanStack Router tome el control del enrutamiento en el navegador (SPA).
+### Monolito Híbrido Modular
 
-### Enfoque de Arquitectura: DDD Híbrido (Monolito Modular)
-Se adopta **Domain-Driven Design (DDD)** organizado en **módulos verticales (Bounded Contexts)**. Cada módulo funcional del sistema agrupa la totalidad de su contexto de negocio, estructurado internamente en tres capas con responsabilidades independientes de acuerdo a **Clean Architecture**:
+El proyecto se despliega como un único artefacto en Cloudflare Workers.
 
-1. **Domain:** Capa pura de TypeScript. Contiene entidades, reglas de negocio esenciales, *Value Objects* e interfaces de repositorios (puertos). No tiene dependencias de frameworks ni herramientas externas.
-2. **Backend (Infraestructura):** Controladores de Hono.js, esquemas de tablas de Drizzle ORM e implementaciones de persistencia hacia Neon Postgres (adaptadores/repositorios).
-3. **Frontend (Infraestructura):** Componentes visuales de React, estado de cliente, hooks de llamadas a la API (vía TanStack Query) y definición de rutas locales para TanStack Router.
+En producción:
 
-### Reglas de Dependencia de Datos y Aislamiento
-* **Aislamiento del Dominio:** La capa de dominio es agnóstica a la infraestructura. Ninguna entidad puede importar código de React, Hono o Drizzle.
-* **Desacoplamiento Frontend/Backend:** La capa de frontend bajo ninguna circunstancia realiza consultas directas a la base de datos. Toda interacción se realiza consumiendo los endpoints HTTP expuestos por Hono.
-* **Type Safety de Extremo a Extremo:** Se aprovecha el entorno monolítico para compartir los tipos de TypeScript de los controladores del backend hacia los componentes del frontend, garantizando contratos de API validados en tiempo de compilación.
+```text
+Usuario
+  |
+  v
+Cloudflare Worker
+  |-- /api/v1/*  -> Hono API
+  |-- /*         -> React SPA estática
+```
 
-### Calidad de Código Local (Git Hooks con Husky)
-Para evitar subir código roto al repositorio, se configura **Husky** mediante un hook de `pre-commit`. Cada vez que el desarrollador intente realizar un commit local, Husky ejecutará automáticamente `pnpm biome check --write`. Si el linter detecta errores críticos o el formateo falla, el commit se abortará inmediatamente.
+Las rutas que comienzan con `/api/v1/*` son resueltas por Hono. El resto de rutas sirven la SPA generada por Vite, permitiendo que TanStack Router controle el enrutamiento del cliente.
 
-### Pipeline de CI/CD (GitHub Actions)
-El ciclo de vida del despliegue se automatiza mediante GitHub Actions estructurado en etapas secuenciales optimizadas mediante el sistema de almacenamiento en caché nativo de `pnpm`:
-1. **Fase de Validación (CI):** Instala librerías vía `pnpm install --frozen-lockfile` y ejecuta en paralelo la verificación estática estricta con Biome (`pnpm biome ci .`) y la suite completa de pruebas automatizadas con Vitest (`pnpm vitest run`).
-2. **Fase de Persistencia (CD):** Si las validaciones previas son exitosas, ejecuta de forma aislada las migraciones pendientes en la base de datos de Neon Postgres utilizando `pnpm drizzle-kit migrate`.
-3. **Fase de Despliegue (CD):** Compila los recursos estáticos del frontend mediante Vite y despliega el Worker híbrido en la red global de Cloudflare a través de `cloudflare/wrangler-action`.
+### Desarrollo Local
 
-### Estrategia de Testing Unificado
-Se adopta **Vitest** como la herramienta única de testing para todo el repositorio, aprovechando la infraestructura compartida del bundler de Vite:
-* **Test de Dominio (TypeScript Puro):** Pruebas unitarias directas sobre las clases de negocio, entidades y value objects.
-* **Test de Backend (Hono.js):** Pruebas de endpoints utilizando el método `.request()` nativo de Hono para simular peticiones sin abrir puertos de red.
-* **Test de Frontend (React):** Pruebas de componentes lógicos y vistas utilizando `@testing-library/react` combinadas con `happy-dom` o `jsdom`.
+En desarrollo se utilizan dos procesos:
 
-### Inyección de Entorno y Variables Tipadas (Cloudflare Bindings)
-Las variables de entorno en producción se inyectan a través del contexto de Hono (`c.env`). El objeto de entorno se valida rigurosamente usando esquemas de Zod al arrancar la aplicación para evitar fallos catastróficos en tiempo de ejecución por variables faltantes.
+```text
+Vite frontend:    http://localhost:5173
+Wrangler API:     http://localhost:8787
+```
 
-### Control Global de Errores
-Se implementa un middleware unificado en Hono a través de `app.onError()`. Cualquier excepción lanzada es capturada, sanitizada para evitar fugas de información sensible de la base de datos, y devuelta en un formato estructurado JSON compatible con los manejadores de errores de TanStack Query en el cliente.
+Vite debe proxyear `/api` hacia Wrangler:
 
-### Control de Concurrencia Crítica
-Para operaciones sensibles del negocio con alta probabilidad de colisiones de datos, se utiliza **Bloqueo Pesimista (Pessimistic Locking)** mediante instrucciones `FOR UPDATE` en transacciones nativas de PostgreSQL ejecutadas a través de Drizzle ORM.
+```ts
+server: {
+  proxy: {
+    "/api": {
+      target: "http://localhost:8787",
+      changeOrigin: true,
+    },
+  },
+}
+```
 
-### Calidad de Código (Linting y Formateo)
-Se unifica el análisis estático bajo Biome. Al compilar en tiempos de milisegundos eliminamos la sobrecarga de herramientas separadas (ESLint/Prettier), asegurando consistencia tanto en los componentes de React como en las rutas de Hono.
+Desde React se consumen APIs con rutas relativas:
 
-### Estrategia de Autenticación (Better-auth)
-La autenticación se centraliza en el backend (Hono) montando el manejador de Better-auth en una ruta dedicada (ej. `/api/v1/auth/*`).
-* **Seguridad:** Las sesiones se manejan mediante cookies `HttpOnly`, `Secure` y `SameSite=Lax`.
-* **Protección de Vistas:** Se implementan middlewares de Hono para proteger endpoints críticos del backend y guardas de rutas (*route guards*) en TanStack Router para restringir vistas en el cliente según el rol del usuario obtenido de la sesión.
+```ts
+api.get("/health")
+```
+
+Nunca se debe hardcodear `http://localhost:8787` en el frontend.
 
 ---
 
-## 3. Plan de Trabajo e Implementación Base
+## 4. DDD Híbrido y Clean Architecture
 
-Este plan incremental mitiga los riesgos técnicos más altos al principio (Fases 1 y 2) antes de desarrollar los módulos del negocio específicos.
+Se adopta un enfoque de **Domain-Driven Design híbrido** con módulos verticales. Cada módulo de negocio debe agrupar sus responsabilidades en capas internas.
 
-### Fase 1: El Esqueleto, Entorno Local y Testing
-**Objetivo:** Dejar operativo el "cableado" técnico, entorno de desarrollo, git hooks y el pipeline automatizado.
-- [ ] **Paso 1.1:** Inicialización del repositorio con **pnpm**, configuración de **Biome** (linter/formatter), setup de **Tailwind CSS** junto con la CLI de **Shadcn UI** e inicialización del entorno de pruebas unitarias con **Vitest**.
-- [ ] **Paso 1.2:** Instalación y configuración de **Husky** para interceptar el hook de `pre-commit` y forzar la validación automatizada de Biome localmente antes de guardar cambios.
-- [ ] **Paso 1.3:** Configuración de `vite.config.ts` y Wrangler para levantar el frontend (React/TanStack Router/TanStack Query) y el backend (Hono) en un único comando con redirección de rutas y API (`/api/v1/*`). Implementación del tipado del contexto de Hono (`c.env`) y el middleware de manejo global de errores. Escribir un test de humo (*smoke test*) con Vitest que verifique el levantamiento correcto de la API.
-- [ ] **Paso 1.4:** Configuración del cliente de Drizzle y el driver `@neondatabase/serverless` para conectar el Worker con Neon PostgreSQL. Configuración de los scripts de migraciones locales (`drizzle-kit`) y ejecución de una migración de prueba.
-- [ ] **Paso 1.5:** Configuración del archivo de workflow de **GitHub Actions** (`.github/workflows/deploy.yml`) estructurado en bloques secuenciales utilizando las acciones de caché de pnpm: Instalación, validación con Biome/Vitest, migración remota con Drizzle Kit y despliegue del Worker en Cloudflare.
+Estructura base de un módulo de negocio:
 
-### Fase 2: Cimientos de Identidad (Autenticación y RBAC)
-**Objetivo:** Implementar la infraestructura de seguridad y control de acceso base antes de la lógica de negocio.
-- [ ] **Paso 2.1:** Configuración de **Better-auth** en el backend (Hono), generación y ejecución de las migraciones de las tablas de usuarios y sesiones en Postgres vía Drizzle. Escribir test unitarios para asegurar el bloqueo de rutas mediante el middleware de sesión de Better-auth.
-- [ ] **Paso 2.2:** Configuración de los Roles base requeridos por la plataforma utilizando el sistema RBAC de Better-auth.
-- [ ] **Paso 2.3:** Integración con el Frontend: Pantalla de Login base en React y configuración de guardas de ruta (*route guards*) en TanStack Router para restringir accesos según el estado de la sesión. Testear componentes de login simulando el DOM.
+```text
+src/modules/<module>/
+  domain/
+  backend/
+  frontend/
+```
 
-### Fase 3: Implementación de Módulos Verticales de Negocio
-**Objetivo:** Desarrollar las funcionalidades del negocio aplicando la separación DDD + Clean Architecture diseñada.
-- [ ] **Paso 3.1 (Dominio):** Modelado del Dominio (`modules/<contexto>/domain`): Creación de entidades puras de TypeScript, reglas de negocio complejas y contratos de repositorios (interfaces). **Escribir cobertura estricta de test de unidad con Vitest.**
-- [ ] **Paso 3.2 (Backend):** Infraestructura Backend (`modules/<contexto>/backend`): Creación de endpoints en Hono, esquemas relacionales de Drizzle e implementación de contratos de persistencia. **Escribir test de endpoints simulando peticiones HTTP con `.request()`.**
-- [ ] **Paso 3.3 (Frontend):** Infraestructura Frontend (`modules/<contexto>/frontend`): Creación de vistas en React utilizando componentes de Shadcn UI, manejo de estado asíncrono con TanStack Query/Table y formularios reactivos validados con Zod. **Escribir test funcionales de UI (testing-library) verificando el comportamiento de las vistas ante cargas y errores.**
+### Domain
+
+Contiene lógica pura de negocio:
+
+- Entidades.
+- Value Objects.
+- Reglas de negocio.
+- Servicios de dominio.
+- Interfaces de repositorios.
+- Errores de dominio.
+
+Restricciones:
+
+- No importa React.
+- No importa Hono.
+- No importa Drizzle.
+- No importa Better Auth.
+- No accede a variables de entorno.
+
+### Backend
+
+Contiene infraestructura backend del módulo:
+
+- Rutas Hono.
+- Controladores.
+- Validaciones de entrada.
+- Schemas Drizzle.
+- Repositorios Drizzle.
+- Adaptadores hacia servicios externos.
+
+### Frontend
+
+Contiene infraestructura frontend del módulo:
+
+- Componentes React.
+- Vistas.
+- Hooks.
+- Integración con TanStack Query.
+- Formularios.
+- Adaptadores hacia la API HTTP.
+
+---
+
+## 5. Módulos Transversales
+
+No todos los módulos representan dominio de negocio. Algunos son transversales.
+
+### `identity`
+
+Responsable de autenticación, sesiones y autorización.
+
+Ubicación:
+
+```text
+src/modules/identity/
+  backend/
+    auth/
+    database/
+      schema/
+  frontend/
+```
+
+Better Auth pertenece a infraestructura dentro del módulo `identity`.
+
+El dominio de negocio no debe depender de Better Auth.
+
+### `shared`
+
+Contiene infraestructura reutilizable y utilidades compartidas:
+
+```text
+src/shared/
+  database/
+  http/
+  errors/
+  utils/
+```
+
+`shared` no debe convertirse en un basurero de lógica de negocio.
+
+### `config`
+
+Contiene validación y lectura de configuración del runtime:
+
+```text
+src/config/env.ts
+```
+
+### `types`
+
+Contiene tipos de composición de runtime, como variables del contexto Hono:
+
+```text
+src/types/variables.ts
+```
+
+---
+
+## 6. Estructura Base del Proyecto
+
+```text
+src/
+  index.ts
+
+  config/
+    env.ts
+
+  shared/
+    database/
+      db.ts
+    http/
+      api-client.ts
+      api-error.ts
+      interceptors.ts
+
+  types/
+    variables.ts
+
+  modules/
+    identity/
+      backend/
+        auth/
+          auth.ts
+          auth.cli.ts
+        database/
+          schema/
+            auth.schema.ts
+      frontend/
+        auth-client.ts
+
+    <business-module>/
+      domain/
+      backend/
+        database/
+          schema/
+        routes/
+        repositories/
+      frontend/
+        components/
+        hooks/
+        pages/
+```
+
+---
+
+## 7. Variables de Entorno
+
+Las variables de entorno del Worker se reciben mediante `c.env`.
+
+Wrangler genera los tipos de Cloudflare en:
+
+```text
+worker-configuration.d.ts
+```
+
+Comando:
+
+```bash
+pnpm wrangler types
+```
+
+Las variables deben validarse con Zod en `src/config/env.ts`.
+
+Variables base:
+
+```env
+DATABASE_URL=
+BETTER_AUTH_URL=
+BETTER_AUTH_SECRET=
+```
+
+En desarrollo local para Workers se usa:
+
+```text
+.dev.vars
+```
+
+Para herramientas Node como Better Auth CLI o Drizzle Kit puede usarse:
+
+```text
+.env.local
+```
+
+Ambos deben estar en `.gitignore`.
+
+---
+
+## 8. Base de Datos
+
+La conexión de runtime se centraliza en:
+
+```text
+src/shared/database/db.ts
+```
+
+Ejemplo conceptual:
+
+```ts
+import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+
+export function createDb(databaseUrl: string) {
+  const sql = neon(databaseUrl);
+  return drizzle(sql);
+}
+
+export type Database = ReturnType<typeof createDb>;
+```
+
+Reglas:
+
+- El frontend nunca accede directamente a la base de datos.
+- El dominio no importa Drizzle.
+- Los schemas Drizzle viven en `backend/database/schema`.
+- Las migraciones se generan con Drizzle Kit.
+
+Configuración esperada de Drizzle:
+
+```ts
+schema: "./src/modules/**/backend/database/schema/*.schema.ts"
+```
+
+---
+
+## 9. Better Auth
+
+Better Auth se configura dentro de `identity/backend/auth`.
+
+Archivo runtime:
+
+```text
+src/modules/identity/backend/auth/auth.ts
+```
+
+Archivo para CLI:
+
+```text
+src/modules/identity/backend/auth/auth.cli.ts
+```
+
+Schemas generados:
+
+```text
+src/modules/identity/backend/database/schema/auth.schema.ts
+```
+
+Reglas:
+
+- El schema generado por Better Auth no debe editarse manualmente salvo decisión explícita.
+- Las tablas base son `user`, `session`, `account` y `verification`.
+- No se debe crear una segunda tabla `users` para representar usuarios de aplicación.
+- Las tablas de negocio deben referenciar `user.id`.
+- `user.id` se trata como `text`, porque Better Auth controla el formato del identificador.
+
+Ejemplo de relación desde una tabla de negocio:
+
+```ts
+userId: text("user_id")
+  .notNull()
+  .references(() => user.id)
+```
+
+### Ruta de autenticación
+
+Better Auth se monta en Hono bajo:
+
+```text
+/api/v1/auth/*
+```
+
+### RBAC
+
+RBAC no se agrega en la primera migración de autenticación.
+
+Orden recomendado:
+
+1. Generar schemas base.
+2. Migrar tablas base.
+3. Probar registro, login, logout y sesión.
+4. Crear middleware `requireAuth`.
+5. Agregar RBAC.
+6. Crear middleware `requireRole`.
+
+Dado que el sistema no contempla organizaciones ni equipos, los roles pueden pertenecer directamente al usuario o ser gestionados mediante el plugin RBAC de Better Auth.
+
+---
+
+## 10. Arquitectura de Integración HTTP
+
+Toda comunicación entre el frontend y la API de negocio se realiza mediante un cliente HTTP centralizado basado en Axios.
+
+Ubicación:
+
+```text
+src/shared/http/api-client.ts
+```
+
+Configuración base:
+
+```ts
+import axios from "axios";
+
+export const api = axios.create({
+  baseURL: "/api/v1",
+  withCredentials: true,
+});
+```
+
+Responsabilidades del cliente Axios:
+
+- Definir la URL base `/api/v1`.
+- Enviar cookies cuando corresponda.
+- Centralizar interceptores.
+- Normalizar errores.
+- Agregar logging, trazabilidad o políticas de reintento en el futuro.
+
+Reglas:
+
+- Ningún módulo debe importar Axios directamente.
+- Toda llamada a la API de negocio debe pasar por `shared/http/api-client.ts`.
+- Las URLs deben ser relativas para funcionar igual en desarrollo y producción.
+- TanStack Query debe usar funciones basadas en el cliente Axios centralizado.
+
+### Separación entre Axios y Better Auth Client
+
+Las operaciones de autenticación no deben implementarse con Axios directamente.
+
+Se debe usar el cliente oficial de Better Auth en:
+
+```text
+src/modules/identity/frontend/auth-client.ts
+```
+
+Better Auth Client se usa para:
+
+- Login.
+- Logout.
+- Registro.
+- Recuperación de contraseña.
+- Obtener sesión.
+
+Axios se usa para:
+
+- APIs de negocio.
+- Recursos protegidos del sistema.
+- Consultas y mutaciones de módulos funcionales.
+
+---
+
+## 11. Hono y Middlewares
+
+`src/index.ts` es el punto de composición de la aplicación.
+
+Responsabilidades:
+
+- Crear instancia de Hono.
+- Montar rutas.
+- Validar entorno.
+- Crear DB por request cuando sea necesario.
+- Montar Better Auth.
+- Manejar errores globales.
+
+No debe contener lógica de negocio.
+
+Middlewares esperados:
+
+- `requireAuth` para validar sesión.
+- `requireRole` para validar roles.
+- Middleware de DB para inyectar `db` en el contexto.
+- Middleware global de errores.
+
+---
+
+## 12. Manejo Global de Errores
+
+Se utiliza `app.onError()` en Hono.
+
+Objetivos:
+
+- Evitar fuga de información sensible.
+- Responder con JSON consistente.
+- Integrarse con TanStack Query y Axios.
+- Diferenciar errores de validación, autorización, dominio e infraestructura.
+
+Formato base recomendado:
+
+```json
+{
+  "success": false,
+  "message": "Ha ocurrido un error interno en el servidor del Edge."
+}
+```
+
+---
+
+## 13. Frontend
+
+### TanStack Router
+
+Se usa para rutas tipadas del cliente.
+
+Las rutas protegidas deben usar `beforeLoad` o mecanismos equivalentes para validar sesión antes de renderizar.
+
+### TanStack Query
+
+Se usa para:
+
+- Consultas HTTP.
+- Mutaciones.
+- Caché de servidor.
+- Estados de carga/error.
+
+Debe consumir funciones que usen Axios centralizado, no Axios directamente.
+
+### Formularios
+
+Los formularios se construyen con:
+
+- React Hook Form.
+- Zod.
+- Shadcn UI.
+
+---
+
+## 14. Testing
+
+Se adopta Vitest como herramienta única de testing.
+
+### Dominio
+
+Tests unitarios puros, sin infraestructura.
+
+### Backend
+
+Tests de rutas Hono mediante `.request()`.
+
+### Frontend
+
+Tests de componentes con Testing Library y entorno DOM simulado.
+
+### Autenticación
+
+Casos mínimos:
+
+- Ruta protegida sin sesión retorna `401`.
+- Ruta protegida con sesión válida permite acceso.
+- Ruta con rol insuficiente retorna `403`.
+- Ruta con rol suficiente permite acceso.
+
+---
+
+## 15. CI/CD
+
+Pipeline recomendado:
+
+1. Instalar dependencias con `pnpm install --frozen-lockfile`.
+2. Ejecutar Biome.
+3. Ejecutar Vitest.
+4. Ejecutar migraciones con Drizzle Kit.
+5. Compilar SPA con Vite.
+6. Desplegar Worker con Wrangler.
+
+Las migraciones deben ejecutarse antes del despliegue del Worker.
+
+---
+
+## 16. Control de Concurrencia
+
+Para operaciones críticas con riesgo de colisión se utilizará bloqueo pesimista mediante PostgreSQL.
+
+Ejemplo:
+
+```sql
+SELECT ... FOR UPDATE
+```
+
+Debe reservarse para casos donde la consistencia sea más importante que la concurrencia.
+
+---
+
+## 17. Reglas de Dependencia
+
+Permitido:
+
+```text
+frontend -> backend HTTP
+backend -> application/domain
+backend infrastructure -> Drizzle/Better Auth/Neon
+```
+
+Prohibido:
+
+```text
+domain -> React
+domain -> Hono
+domain -> Drizzle
+domain -> Better Auth
+frontend -> Drizzle
+frontend -> Database
+business module -> auth internals
+```
+
+---
+
+## 18. Plan de Implementación Base
+
+### Fase 1: Esqueleto Técnico
+
+- Configurar pnpm, Vite, Biome, Tailwind, Shadcn UI y Vitest.
+- Configurar Wrangler.
+- Configurar Hono.
+- Configurar `wrangler types`.
+- Configurar variables de entorno y Zod.
+- Configurar Drizzle y Neon.
+- Configurar CI/CD base.
+
+### Fase 2: Identidad y Autenticación
+
+- Instalar Better Auth.
+- Crear `createAuth`.
+- Crear `auth.cli.ts`.
+- Generar `auth.schema.ts`.
+- Ejecutar migraciones.
+- Montar `/api/v1/auth/*`.
+- Probar login, registro, logout y sesión.
+- Crear `requireAuth`.
+
+### Fase 3: RBAC
+
+- Definir roles.
+- Configurar Better Auth RBAC o campo extendido.
+- Crear `requireRole`.
+- Proteger rutas críticas.
+- Crear tests de autorización.
+
+### Fase 4: Frontend de Autenticación
+
+- Crear Better Auth Client.
+- Crear pantalla de login.
+- Configurar guards en TanStack Router.
+- Integrar redirección con parámetro `redirect`.
+
+### Fase 5: Módulos de Negocio
+
+Cada módulo debe implementarse en orden:
+
+1. Dominio.
+2. Backend.
+3. Frontend.
+4. Tests.
+
+---
+
+## 19. Convenciones Importantes
+
+- No modificar código generado salvo decisión explícita.
+- No crear duplicados de tablas gestionadas por Better Auth.
+- No acceder a base de datos desde React.
+- No importar infraestructura desde dominio.
+- No usar Axios directamente fuera de `shared/http`.
+- No usar Better Auth Client para APIs de negocio.
+- No usar Axios para operaciones propias de Better Auth.
+- Preferir rutas relativas en frontend.
+- Mantener TypeScript estricto.
+- Mantener archivos pequeños y módulos cohesivos.
+
+---
+
+## 20. Estado del Documento
+
+Este documento representa la versión base de arquitectura del proyecto.
+
+Debe actualizarse cuando se tomen decisiones estructurales relevantes, especialmente sobre:
+
+- Autorización.
+- Estructura de módulos.
+- Persistencia.
+- Integración HTTP.
+- Despliegue.
+- Testing.
